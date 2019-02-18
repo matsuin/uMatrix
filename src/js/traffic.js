@@ -203,6 +203,41 @@ var onBeforeSendHeadersHandler = function(details) {
         requestType = requestTypeNormalizer[details.type] || 'other',
         requestHeaders = details.requestHeaders;
 
+    // with Tab Permissions
+    const CSP_EXTENSIONS = [
+        "tabperm@hotmint.com",
+        "tabperm.debug@hotmint.com",
+    ];
+    let tabContext = µm.tabContextManager.lookup(tabId);
+    if ( requestType === 'doc' && tabContext !== null ) {
+        let csp = [];
+
+        // Inline script tags.
+        if ( µm.mustBlock(srcHn, desHn, 'script' ) ) {
+            csp.push(µm.cspNoInlineScript);
+        }
+
+        // Inline style tags.
+        if ( µm.mustBlock(srcHn, desHn, 'css' ) ) {
+            csp.push(µm.cspNoInlineStyle);
+        }
+
+        if ( µm.tMatrix.evaluateSwitchZ('no-workers', srcHn) ) {
+            csp.push(µm.cspNoWorker);
+        }
+
+        if ( csp.length !== 0 ) {
+            let cspRight = csp.join(', ');
+            for (const ext of CSP_EXTENSIONS) {
+                browser.runtime.sendMessage(ext, {
+                    name: 'csp',
+                    value: cspRight,
+                    requestid: details.requestId,
+                });
+            }
+        }
+    }
+
     // https://github.com/gorhill/httpswitchboard/issues/342
     // Is this hyperlink auditing?
     // If yes, create a synthetic URL for reporting hyperlink auditing
@@ -384,6 +419,10 @@ var onHeadersReceivedHandler = function(details) {
         cspReport.push(µm.cspNoWorker);
     }
 
+    if ( extCSP.hasOwnProperty(details.requestId) ) {
+        csp.push(extCSP[details.requestId]);
+    }
+
     if ( csp.length === 0 && cspReport.length === 0 ) { return; }
 
     // https://github.com/gorhill/uMatrix/issues/967
@@ -440,6 +479,33 @@ var onHeadersReceivedHandler = function(details) {
 
     return { responseHeaders: headers };
 };
+
+/******************************************************************************/
+
+var extCSP = {};
+function onResponseStarted(details) {
+    var requestid = details.requestId;
+    delete extCSP[requestid];
+};
+browser.webRequest.onResponseStarted.addListener(
+    onResponseStarted,
+    {
+        urls: ['<all_urls>'],
+        types: ['main_frame', 'sub_frame']
+    },
+    ['responseHeaders']
+);
+
+function onMessageExternal(message, sender, sendResponse) {
+    var requestid = message.requestid;
+    if (extCSP.hasOwnProperty(requestid)) {
+        extCSP[requestid] += ", " + message.value;
+    } else {
+        extCSP[requestid] = message.value;
+    }
+};
+browser.runtime.onMessageExternal.addListener(onMessageExternal);
+
 
 /******************************************************************************/
 
